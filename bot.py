@@ -93,7 +93,15 @@ async def whale_example(callback: types.CallbackQuery):
 # ===== ЗАПУСК БОТА =====
 async def main():
     logging.basicConfig(level=logging.INFO)
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()  # Важная строка!
+        await (await bot.get_session()).close()  # Двойное закрытие для надёжности
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped")
+        # Дополнительные действия при остановке
