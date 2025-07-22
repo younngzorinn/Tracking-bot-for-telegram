@@ -3,6 +3,8 @@ import asyncio
 import logging
 import aiohttp
 import pandas as pd
+import re
+from datetime import datetime, timezone
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -20,6 +22,7 @@ CHANNEL_ID = -1002881724171  # ID вашего канала для публик�
 ALLOWED_USERS = [ADMIN_CHAT_ID]
 TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
 TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
+LIQUIDATIONS_CHANNEL = 'BinanceLiquidations'
 
 # Инициализация бота
 bot = Bot(
@@ -307,16 +310,6 @@ async def monitor_price_changes():
     except Exception as e:
         logging.error(f"Error monitoring price changes: {e}")
 
-# ===== ИМИТАЦИЯ ПАРСИНГА ТЕЛЕГРАМ КАНАЛОВ =====
-# Добавляем необходимые импорты
-import re
-import logging
-from telethon import TelegramClient, events
-
-# Конфигурация Telegram API (добавьте в раздел конфигурации)
-TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
-TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
-LIQUIDATIONS_CHANNEL = 'BinanceLiquidations'
 
 # ===== РЕАЛЬНЫЙ ПАРСИНГ ЛИКВИДАЦИЙ =====
 async def parse_real_liquidations():
@@ -435,30 +428,107 @@ async def publish_real_liquidations():
     except Exception as e:
         logging.critical(f"Критическая ошибка публикации ликвидаций: {str(e)}")
 
-async def simulate_whale_alert():
-    """Имитация парсинга Whale Alert"""
-    try:
-        # В реальной реализации здесь будет парсинг @whale_alert_io
-        # Для демонстрации генерируем фейковые данные
-        import random
-        eth_amount = random.uniform(10_000, 50_000)
-        price = await get_eth_price()
-        if not price:
-            price = 3500
-        amount_usd = eth_amount * price
-        
-        message = (
-            f"{format_whale_message(amount_usd)}\n\n"
-            f"▫️ Сумма: <b>{eth_amount:,.0f} ETH</b> (${amount_usd/1_000_000:.2f}M)\n"
-            f"▫️ От: {random.choice(['Binance', 'Coinbase', 'Unknown wallet'])}\n"
-            f"▫️ К: {random.choice(['Cold wallet', 'Exchange', 'DeFi contract'])}\n"
-            f"▫️ Время: {datetime.utcnow().strftime('%H:%M UTC')}\n\n"
-            "#ETH #WhaleAlert"
-        )
-        await bot.send_message(CHANNEL_ID, message)
-    except Exception as e:
-        logging.error(f"Error simulating whale alerts: {e}")
+import re
+from datetime import datetime, timezone
 
+# ===== РЕАЛЬНЫЙ ПАРСИНГ WHALE ALERT =====
+async def parse_real_whale_alerts():
+    """Парсинг реальных whale-транзакций с Telegram-канала Whale Alert"""
+    alerts = []
+    client = TelegramClient('whale_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    
+    try:
+        await client.start()
+        channel = await client.get_entity('whale_alert_io')
+        
+        # Получаем последние 20 сообщений
+        messages = await client.get_messages(channel, limit=20)
+        
+        for msg in messages:
+            if data := parse_whale_message(msg.text):
+                data['timestamp'] = msg.date
+                alerts.append(data)
+                
+    except Exception as e:
+        logging.error(f"Ошибка парсинга Whale Alert: {str(e)}")
+    finally:
+        await client.disconnect()
+    
+    return alerts
+
+def parse_whale_message(text: str) -> dict | None:
+    """Разбор сообщения о whale-транзакции"""
+    if not text or "#ETH" not in text:
+        return None
+    
+    try:
+        # Пример сообщения:
+        # 🚨  24,999 #ETH (87,465,128 USD) transferred from #Coinbase to unknown wallet
+        # Tx: https://etherscan.io/tx/0x... 
+        # #ETH #WhaleAlert
+        lines = text.split('\n')
+        if len(lines) < 1:
+            return None
+        
+        # Парсинг основной информации
+        match = re.search(r"([\d,\.]+)\s+#ETH\s+\(([\d,\.]+)\s+USD\).*?from\s+(.*?)\s+to\s+(.*)", lines[0])
+        if not match:
+            return None
+        
+        eth_amount = float(match.group(1).replace(',', ''))
+        usd_amount = float(match.group(2).replace(',', ''))
+        from_wallet = match.group(3).strip()
+        to_wallet = match.group(4).strip()
+        
+        # Парсинг ссылки на транзакцию
+        tx_url = None
+        for line in lines:
+            if line.startswith("Tx: http"):
+                tx_url = line.replace("Tx: ", "").strip()
+                break
+        
+        return {
+            'eth_amount': eth_amount,
+            'usd_amount': usd_amount,
+            'from_wallet': from_wallet,
+            'to_wallet': to_wallet,
+            'tx_url': tx_url
+        }
+    
+    except (ValueError, IndexError) as e:
+        logging.warning(f"Ошибка формата Whale Alert: {str(e)}")
+        return None
+
+async def publish_real_whale_alerts():
+    """Публикация реальных whale-транзакций"""
+    try:
+        alerts = await parse_real_whale_alerts()
+        for alert in alerts:
+            # Форматируем сообщение
+            emoji = "🐋" if alert['usd_amount'] < 100_000_000 else "🐳"
+            message = (
+                f"{emoji} <b>WHALE ALERT: {alert['eth_amount']:,.0f} ETH!</b>\n\n"
+                f"▫️ Сумма: <b>${alert['usd_amount']/1_000_000:.2f}M</b>\n"
+                f"▫️ От: {alert['from_wallet']}\n"
+                f"▫️ К: {alert['to_wallet']}\n"
+            )
+            
+            if alert['tx_url']:
+                message += f"▫️ Транзакция: <a href='{alert['tx_url']}'>Etherscan</a>\n"
+            
+            message += (
+                f"▫️ Время: {alert['timestamp'].astimezone(timezone.utc).strftime('%H:%M UTC')}\n\n"
+                "#ETH #WhaleAlert"
+            )
+            
+            await bot.send_message(CHANNEL_ID, message, disable_web_page_preview=True)
+        
+        # Если не найдено свежих транзакций
+        if not alerts:
+            logging.info("No fresh whale alerts found")
+            
+    except Exception as e:
+        logging.critical(f"Критическая ошибка Whale Alert: {str(e)}")
 # ===== ИНИЦИАЛИЗАЦИЯ ПЛАНИРОВЩИКА =====
 def setup_scheduler():
     # Новости каждые 4 часа
@@ -478,7 +548,7 @@ def setup_scheduler():
     
     # Имитация ликвидаций и whale alert
     scheduler.add_job(publish_real_liquidations, 'interval', minutes=1)
-    scheduler.add_job(simulate_whale_alert, 'interval', minutes=1)
+    scheduler.add_job(publish_real_whale_alerts, 'interval', minutes=2)
     
     scheduler.start()
 
