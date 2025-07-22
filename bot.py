@@ -121,13 +121,13 @@ async def fetch_crypto_news():
 
 async def get_eth_price():
     """Получение текущей цены ETH"""
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+    url = "https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT"
     
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url) as response:
                 data = await response.json()
-                return data["ethereum"]["usd"]
+                return float(data['price'])
         except Exception as e:
             logging.error(f"Error fetching ETH price: {e}")
             return None
