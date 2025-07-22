@@ -94,10 +94,20 @@ async def whale_example(callback: types.CallbackQuery):
 async def main():
     logging.basicConfig(level=logging.INFO)
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, skip_updates=True)  # Пропустить накопившиеся апдейты
+    except Exception as e:
+        logging.error(f"Fatal error: {e}")
     finally:
-        await bot.session.close()  # Важная строка!
-        await (await bot.get_session()).close()  # Двойное закрытие для надёжности
+        try:
+            # Закрытие всех сессий
+            await bot.session.close()
+            if hasattr(bot, '_session'):
+                await bot._session.close()
+            # Дополнительное закрытие для aiohttp
+            if hasattr(bot, '_client_session') and not bot._client_session.closed:
+                await bot._client_session.close()
+        except Exception as e:
+            logging.error(f"Session close error: {e}")
 
 if __name__ == "__main__":
     try:
