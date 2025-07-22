@@ -1,17 +1,22 @@
+import os
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties  # Важный импорт!
 
 # Конфигурация
-API_TOKEN = '8052550644:AAEWDNDAsx6XwVHYzyM1tTzkUj69FHEvqOQ'
-ADMIN_CHAT_ID = 579542680  # Ваш chat_id для тестов
+API_TOKEN = os.getenv('API_TOKEN')  # Получаем токен из переменных окружения
+ADMIN_CHAT_ID = 123456789  # Ваш chat_id для тестов
 ALLOWED_USERS = [ADMIN_CHAT_ID]  # Список разрешенных пользователей
 
-# Инициализация бота
-bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+# Инициализация бота с исправлением
+bot = Bot(
+    token=API_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 
 # ===== Middleware для приватного доступа =====
@@ -51,6 +56,7 @@ async def news_example(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "chart_example")
 async def chart_example(callback: types.CallbackQuery):
+    # Для фото нужно явно указать parse_mode=None
     await callback.message.answer_photo(
         photo="https://s3.coinmarketcap.com/generated/sparklines/web/7d/2781/1027.svg",
         caption="📊 <b>Анализ 4H свечи ETH/USDT</b>\n\n"
@@ -58,7 +64,8 @@ async def chart_example(callback: types.CallbackQuery):
                 "▫️ <b>Ключевые уровни:</b>\n"
                 "Поддержка: $3750 | $3680\n"
                 "Сопротивление: $3820 | $3900\n\n"
-                "🟢 Сценарий: Пробитие $3820 может открыть путь к $4000"
+                "🟢 Сценарий: Пробитие $3820 может открыть путь к $4000",
+        parse_mode=None  # Явное указание для фото
     )
 
 @dp.callback_query(lambda c: c.data == "liquidation_example")
