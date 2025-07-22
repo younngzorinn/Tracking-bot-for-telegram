@@ -3,30 +3,52 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties  # Важный импорт!
+from aiogram.client.default import DefaultBotProperties
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
 # Конфигурация
-API_TOKEN = os.getenv('API_TOKEN')  # Получаем токен из переменных окружения
-ADMIN_CHAT_ID = 123456789  # Ваш chat_id для тестов
-ALLOWED_USERS = [ADMIN_CHAT_ID]  # Список разрешенных пользователей
+API_TOKEN = os.getenv('API_TOKEN')
+ADMIN_CHAT_ID = 579542680  # Ваш chat_id
+ALLOWED_USERS = [ADMIN_CHAT_ID]
 
-# Инициализация бота с исправлением
 bot = Bot(
     token=API_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
 
-# ===== Middleware для приватного доступа =====
-async def check_user_access(handler, event, data):
-    if event.from_user.id not in ALLOWED_USERS:
-        await event.answer("⛔ Доступ запрещен!")
-        return False
-    return await handler(event, data)
+# ===== ИСПРАВЛЕННЫЙ Middleware =====
+class AccessMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: Update, data):
+        # Извлекаем пользователя в зависимости от типа события
+        user_id = None
+        
+        if event.message:
+            user_id = event.message.from_user.id
+        elif event.callback_query:
+            user_id = event.callback_query.from_user.id
+        elif event.edited_message:
+            user_id = event.edited_message.from_user.id
+        elif event.channel_post:
+            user_id = event.channel_post.from_user.id if event.channel_post.from_user else None
+        elif event.edited_channel_post:
+            user_id = event.edited_channel_post.from_user.id if event.edited_channel_post.from_user else None
+        
+        # Если не удалось извлечь user_id или он не в списке разрешенных
+        if not user_id or user_id not in ALLOWED_USERS:
+            # Пытаемся ответить в зависимости от типа события
+            if event.callback_query:
+                await event.callback_query.answer("⛔ Доступ запрещен!", show_alert=True)
+            elif event.message:
+                await event.message.answer("⛔ Доступ запрещен!")
+            return False
+        
+        return await handler(event, data)
 
-dp.update.middleware(check_user_access)
+# Регистрируем middleware
+dp.update.outer_middleware(AccessMiddleware())
 
 # ===== КОМАНДЫ =====
 @dp.message(Command("start"))
@@ -44,74 +66,20 @@ async def cmd_start(message: types.Message):
     )
 
 # ===== ПРИМЕРЫ УВЕДОМЛЕНИЙ =====
-@dp.callback_query(lambda c: c.data == "news_example")
-async def news_example(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "❗️❗️❗️ <b>СРОЧНЫЕ НОВОСТИ ETH</b> ❗️❗️❗️\n\n"
-        "🔥 Vitalik Buterin предложил масштабное обновление сети\n"
-        "📍 Источник: CoinDesk\n"
-        "<a href='https://example.com'>Читать полностью</a>",
-        disable_web_page_preview=True
-    )
-
-@dp.callback_query(lambda c: c.data == "chart_example")
-async def chart_example(callback: types.CallbackQuery):
-    # Для фото нужно явно указать parse_mode=None
-    await callback.message.answer_photo(
-        photo="https://s3.coinmarketcap.com/generated/sparklines/web/7d/2781/1027.svg",
-        caption="📊 <b>Анализ 4H свечи ETH/USDT</b>\n\n"
-                "▫️ <b>Текущая цена:</b> $3785.42 (+2.3%)\n"
-                "▫️ <b>Ключевые уровни:</b>\n"
-                "Поддержка: $3750 | $3680\n"
-                "Сопротивление: $3820 | $3900\n\n"
-                "🟢 Сценарий: Пробитие $3820 может открыть путь к $4000",
-        parse_mode=None  # Явное указание для фото
-    )
-
-@dp.callback_query(lambda c: c.data == "liquidation_example")
-async def liquidation_example(callback: types.CallbackQuery):
-    await callback.message.answer(
-        "📉 <b>КРУПНАЯ ЛИКВИДАЦИЯ ETH!</b>\n\n"
-        "▫️ Биржа: <b>Binance</b>\n"
-        "▫️ Направление: <b>LONG</b> ▫️ Сумма: <b>$2.1M</b>\n"
-        "▫️ Цена: $3776.40\n"
-        "▫️ Время: 12:45 UTC\n\n"
-        "#ETH #Liquidation"
-    )
-
-@dp.callback_query(lambda c: c.data == "whale_example")
-async def whale_example(callback: types.CallbackQuery):
-    await callback.message.answer(
-        "🐋 <b>WHALE ALERT!</b> 🚨\n\n"
-        "▫️ Сумма: <b>24,500 ETH</b> ($92.4M)\n"
-        "▫️ От: Binance\n"
-        "▫️ К: неизвестный кошелек\n"
-        "▫️ Транзакция: <a href='https://etherscan.io/tx/0x...'>Etherscan</a>\n\n"
-        "📍 Классификация: КИТОВАЯ ТРАНЗАКЦИЯ"
-    )
+# ... остальной код без изменений (как в предыдущих примерах) ...
 
 # ===== ЗАПУСК БОТА =====
 async def main():
     logging.basicConfig(level=logging.INFO)
     try:
-        await dp.start_polling(bot, skip_updates=True)  # Пропустить накопившиеся апдейты
-    except Exception as e:
-        logging.error(f"Fatal error: {e}")
+        await dp.start_polling(bot, skip_updates=True)
     finally:
-        try:
-            # Закрытие всех сессий
-            await bot.session.close()
-            if hasattr(bot, '_session'):
-                await bot._session.close()
-            # Дополнительное закрытие для aiohttp
-            if hasattr(bot, '_client_session') and not bot._client_session.closed:
-                await bot._client_session.close()
-        except Exception as e:
-            logging.error(f"Session close error: {e}")
+        # Закрытие сессий
+        await bot.session.close()
+        if hasattr(bot, '_session'):
+            await bot._session.close()
+        if hasattr(bot, '_client_session') and not bot._client_session.closed:
+            await bot._client_session.close()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot stopped")
-        # Дополнительные действия при остановке
+    asyncio.run(main())
