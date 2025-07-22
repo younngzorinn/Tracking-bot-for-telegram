@@ -3,7 +3,7 @@ import os
 import asyncio
 import aiohttp
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ParseMode
+from aiogram.enums import ParseMode  
 from aiogram.utils import executor
 from datetime import datetime
 
