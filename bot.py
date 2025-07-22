@@ -1,3 +1,6 @@
+if not os.getenv('TELEGRAM_API_ID') or not os.getenv('TELEGRAM_API_HASH'):
+    logging.critical("TELEGRAM_API_ID or TELEGRAM_API_HASH not set!")
+    exit(1)
 import os 
 import asyncio
 import logging
