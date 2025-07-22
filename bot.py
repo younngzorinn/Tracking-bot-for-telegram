@@ -52,40 +52,72 @@ async def fetch_crypto_news():
     sources = {
         "CoinDesk": "https://www.coindesk.com/tag/ethereum/feed",
         "The Block": "https://www.theblock.co/rss/ethereum",
-        "CoinTelegraph": "https://cointelegraph.com/rss/tag/ethereum"
+        "CoinTelegraph": "https://cointelegraph.com/rss/tag/ethereum",
+        "Decrypt": "https://decrypt.co/feed/ethereum",
+        "ETHNews": "https://www.ethnews.com/feed",
+        "CryptoSlate": "https://cryptoslate.com/categories/ethereum/feed/",
+        "TrustNodes": "https://www.trustnodes.com/feed",
+        "ETHHub": "https://ethhub.io/feed.xml"
     }
     
     news_items = []
+    seen_titles = set()  # Для фильтрации дубликатов
     
     async with aiohttp.ClientSession() as session:
         for source, url in sources.items():
             try:
-                async with session.get(url) as response:
+                async with session.get(url, timeout=10) as response:
                     if response.status == 200:
                         xml = await response.text()
                         soup = BeautifulSoup(xml, 'xml')
                         
-                        for item in soup.find_all('item')[:5]:  # Берем последние 5 новостей
-                            title = item.title.text
+                        for item in soup.find_all('item')[:5]:
+                            title = item.title.text.strip()
+                            
+                            # Пропускаем дубликаты
+                            if title in seen_titles:
+                                continue
+                            seen_titles.add(title)
+                            
                             link = item.link.text
                             pub_date = item.pubDate.text if item.pubDate else ""
                             
-                            # Определяем важность новости по ключевым словам
+                            # Определяем важность новости
                             importance = "❗️"
-                            keywords = ["hack", "exploit", "vulnerability", "critical", "emergency", "vitalik"]
+                            keywords = [
+                                "hack", "exploit", "vulnerability", "critical", 
+                                "emergency", "vitalik", "upgrade", "hard fork",
+                                "security", "exploit", "bug", "attack"
+                            ]
                             if any(kw in title.lower() for kw in keywords):
                                 importance = "❗️❗️❗️"
                             
+                            # Добавляем эмодзи для разных источников
+                            source_emoji = {
+                                "CoinDesk": "📰",
+                                "The Block": "🔗",
+                                "CoinTelegraph": "📢",
+                                "Decrypt": "🔓",
+                                "ETHNews": "🌐",
+                                "CryptoSlate": "🧩",
+                                "TrustNodes": "🤝",
+                                "ETHHub": "⚙️"
+                            }
+                            
                             news_items.append({
-                                "source": source,
+                                "source": f"{source_emoji.get(source, '📌')} {source}",
                                 "title": f"{importance} {title}",
                                 "link": link,
-                                "pub_date": pub_date
+                                "pub_date": pub_date,
+                                "timestamp": datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z') if pub_date else datetime.now()
                             })
             except Exception as e:
                 logging.error(f"Error fetching news from {source}: {e}")
     
-    return news_items
+    # Сортируем новости по дате (свежие в начале)
+    news_items.sort(key=lambda x: x['timestamp'], reverse=True)
+    
+    return news_items[:15]  # Возвращаем 15 самых свежих новостей
 
 async def get_eth_price():
     """Получение текущей цены ETH"""
@@ -430,7 +462,7 @@ async def simulate_whale_alert():
 # ===== ИНИЦИАЛИЗАЦИЯ ПЛАНИРОВЩИКА =====
 def setup_scheduler():
     # Новости каждые 4 часа
-    scheduler.add_job(publish_eth_news, 'interval', hours=4)
+    scheduler.add_job(publish_eth_news, 'interval', hours=1)
     
     # Анализ свечей
     scheduler.add_job(send_candle_analysis, 'cron', hour='*/1', args=["1h"])  # Каждый час
@@ -442,11 +474,11 @@ def setup_scheduler():
     scheduler.add_job(send_altseason_indicator, 'cron', hour=11, minute=0)
     
     # Мониторинг цены каждые 30 минут
-    scheduler.add_job(monitor_price_changes, 'interval', minutes=30)
+    scheduler.add_job(monitor_price_changes, 'interval', minutes=15)
     
     # Имитация ликвидаций и whale alert
-    scheduler.add_job(publish_real_liquidations, 'interval', minutes=15)
-    scheduler.add_job(simulate_whale_alert, 'interval', minutes=20)
+    scheduler.add_job(publish_real_liquidations, 'interval', minutes=1)
+    scheduler.add_job(simulate_whale_alert, 'interval', minutes=1)
     
     scheduler.start()
 
