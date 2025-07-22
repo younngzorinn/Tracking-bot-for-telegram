@@ -5,4 +5,4 @@ beautifulsoup4==4.12.3
 cachetools==5.3.3
 pandas==2.2.3 --only-binary=:all:
 python-telegram-bot==20.7
-telethon==1.34.1
+telethon==1.38.1
