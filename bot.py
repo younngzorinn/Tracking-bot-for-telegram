@@ -2,18 +2,18 @@ import os
 import asyncio
 import logging
 import aiohttp
-import pandas as pd
 import re
-from datetime import datetime, timezone
-from datetime import datetime, timedelta
+import random
+from cachetools import TTLCache
+from datetime import datetime, timezone, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bs4 import BeautifulSoup
+from telethon import TelegramClient
 
 # Конфигурация
 API_TOKEN = os.getenv('API_TOKEN')
@@ -23,6 +23,7 @@ ALLOWED_USERS = [ADMIN_CHAT_ID]
 TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
 TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
 LIQUIDATIONS_CHANNEL = 'BinanceLiquidations'
+WHALE_ALERT_CHANNEL = 'whale_alert_io'
 
 # Инициализация бота
 bot = Bot(
@@ -31,6 +32,16 @@ bot = Bot(
 )
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
+
+# Инициализация клиентов Telegram
+client_liquidations = TelegramClient('binance_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
+client_whale = TelegramClient('whale_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
+
+# Кэш для предотвращения дублирования сообщений
+message_cache = TTLCache(maxsize=1000, ttl=3600)  # 1 час
+
+# Глобальные переменные для отслеживания цены
+PREVIOUS_PRICE = None
 
 # ===== Middleware для приватного доступа =====
 class AccessMiddleware(BaseMiddleware):
@@ -85,6 +96,12 @@ async def fetch_crypto_news():
                             link = item.link.text
                             pub_date = item.pubDate.text if item.pubDate else ""
                             
+                            # Обработка даты
+                            try:
+                                timestamp = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z').replace(tzinfo=timezone.utc)
+                            except:
+                                timestamp = datetime.now(timezone.utc)
+                            
                             # Определяем важность новости
                             importance = "❗️"
                             keywords = [
@@ -112,7 +129,7 @@ async def fetch_crypto_news():
                                 "title": f"{importance} {title}",
                                 "link": link,
                                 "pub_date": pub_date,
-                                "timestamp": datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z') if pub_date else datetime.now()
+                                "timestamp": timestamp
                             })
             except Exception as e:
                 logging.error(f"Error fetching news from {source}: {e}")
@@ -128,7 +145,7 @@ async def get_eth_price():
     
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url) as response:
+            async with session.get(url, timeout=10) as response:
                 data = await response.json()
                 return float(data['price'])
         except Exception as e:
@@ -148,7 +165,7 @@ async def get_candles(timeframe="1d"):
     
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url) as response:
+            async with session.get(url, timeout=10) as response:
                 data = await response.json()
                 return data
         except Exception as e:
@@ -200,7 +217,6 @@ def get_altseason_indicator():
     """Расчет индикатора альтсезона (упрощенная версия)"""
     # В реальной реализации здесь будет анализ доминирования BTC/ETH
     # Пока используем случайное значение для демонстрации
-    import random
     value = random.randint(0, 100)
     
     if value < 30:
@@ -210,23 +226,19 @@ def get_altseason_indicator():
     else:
         return f"🟢 {value} - Альтсезон! Рост альткоинов вероятен."
 
-def format_whale_message(amount_usd):
-    """Форматирование сообщения о whale-транзакции с эмодзи"""
-    if amount_usd > 100_000_000:
-        return f"🚨🐋 КИТОВАЯ ТРАНЗАКЦИЯ! ${amount_usd/1_000_000:.1f}M"
-    elif amount_usd > 50_000_000:
-        return f"🐋 Крупная транзакция ${amount_usd/1_000_000:.1f}M"
-    elif amount_usd > 10_000_000:
-        return f"💰 Значительная транзакция ${amount_usd/1_000_000:.1f}M"
-    else:
-        return f"↕️ Транзакция ${amount_usd/1_000_000:.1f}M"
-
 # ===== ЗАПЛАНИРОВАННЫЕ ЗАДАЧИ =====
 async def publish_eth_news():
     """Публикация новостей о ETH"""
     try:
         news = await fetch_crypto_news()
         for item in news:
+            # Проверка на дубликаты
+            cache_key = f"news_{item['link']}"
+            if cache_key in message_cache:
+                continue
+                
+            message_cache[cache_key] = True
+            
             message = (
                 f"{item['title']}\n\n"
                 f"📰 Источник: {item['source']}\n"
@@ -234,7 +246,7 @@ async def publish_eth_news():
                 f"<a href='{item['link']}'>Читать полностью</a>"
             )
             await bot.send_message(CHANNEL_ID, message, disable_web_page_preview=True)
-            await asyncio.sleep(5)  # Пауза между сообщениями
+            await asyncio.sleep(3)  # Пауза между сообщениями
     except Exception as e:
         logging.error(f"Error publishing news: {e}")
 
@@ -288,24 +300,36 @@ async def send_altseason_indicator():
 
 async def monitor_price_changes():
     """Мониторинг резких изменений цены"""
+    global PREVIOUS_PRICE
+    
     try:
         current_price = await get_eth_price()
         if not current_price:
             return
         
-        # В реальной реализации здесь будет сравнение с предыдущей ценой
-        # Для демонстрации используем случайное изменение
-        import random
-        change = random.uniform(-5, 5)
+        if PREVIOUS_PRICE is None:
+            PREVIOUS_PRICE = current_price
+            return
+            
+        # Расчет реального изменения
+        change = ((current_price - PREVIOUS_PRICE) / PREVIOUS_PRICE) * 100
+        PREVIOUS_PRICE = current_price
         
         if abs(change) > 3:
             direction = "📈" if change > 0 else "📉"
             message = (
                 f"{direction * 3} <b>РЕЗКОЕ ИЗМЕНЕНИЕ ЦЕНЫ ETH!</b> {direction * 3}\n\n"
                 f"▫️ Текущая цена: <b>${current_price:,.2f}</b>\n"
-                f"▫️ Изменение: <b>{change:.2f}%</b> за последний час\n\n"
+                f"▫️ Изменение: <b>{change:.2f}%</b> за последние 30 минут\n\n"
                 f"⚠️ Возможны повышенные колебания рынка"
             )
+            
+            # Проверка на дубликаты
+            cache_key = f"price_{current_price:.2f}_{change:.2f}"
+            if cache_key in message_cache:
+                return
+                
+            message_cache[cache_key] = True
             await bot.send_message(CHANNEL_ID, message)
     except Exception as e:
         logging.error(f"Error monitoring price changes: {e}")
@@ -315,23 +339,27 @@ async def monitor_price_changes():
 async def parse_real_liquidations():
     """Парсинг реальных ликвидаций с Telegram-канала"""
     liquidations = []
-    client = TelegramClient('binance_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
     
     try:
-        await client.start()
-        channel = await client.get_entity(LIQUIDATIONS_CHANNEL)
+        if not client_liquidations.is_connected():
+            await client_liquidations.start()
         
-        # Получаем последние 10 сообщений
-        messages = await client.get_messages(channel, limit=10)
+        channel = await client_liquidations.get_entity(LIQUIDATIONS_CHANNEL)
         
-        for msg in messages:
+        # Получаем последние 20 сообщений
+        messages = await client_liquidations.get_messages(channel, limit=20)
+        
+        # Фильтрация сообщений за последний час
+        min_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        recent_messages = [msg for msg in messages if msg.date > min_time]
+        
+        for msg in recent_messages:
             if data := parse_liquidation_message(msg.text):
+                data['timestamp'] = msg.date
                 liquidations.append(data)
                 
     except Exception as e:
         logging.error(f"Ошибка парсинга ликвидаций: {str(e)}")
-    finally:
-        await client.disconnect()
     
     return liquidations
 
@@ -397,62 +425,55 @@ async def publish_real_liquidations():
                 price = last['price']
                 position = last['position']
                 
+                # Проверка на дубликаты
+                cache_key = f"liq_{amount}_{price}"
+                if cache_key in message_cache:
+                    return
+                    
+                message_cache[cache_key] = True
+                
                 message = (
                     "📉 <b>РЕАЛЬНАЯ ЛИКВИДАЦИЯ ETH НА BINANCE!</b>\n\n"
                     f"▫️ Направление: <b>{position}</b>\n"
                     f"▫️ Сумма: <b>${amount/1_000_000:.2f}M</b>\n"
                     f"▫️ Цена: ${price:.2f}\n"
-                    f"▫️ Время: {datetime.utcnow().strftime('%H:%M UTC')}\n\n"
+                    f"▫️ Время: {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n\n"
                     "#ETH #Liquidation #Binance"
                 )
                 await bot.send_message(CHANNEL_ID, message)
                 return
         
         # Резервный вариант если данных нет
-        logging.warning("Не найдены свежие ликвидации ETH, используется резервный вариант")
-        import random
-        amount = random.uniform(1, 10) * 1_000_000
-        price = await get_eth_price() or 3500
-        position = random.choice(['LONG', 'SHORT'])
-        
-        message = (
-            "📉 <b>ЛИКВИДАЦИЯ ETH (резервные данные)</b>\n\n"
-            f"▫️ Направление: <b>{position}</b>\n"
-            f"▫️ Сумма: <b>${amount/1_000_000:.2f}M</b>\n"
-            f"▫️ Цена: ${price:.2f}\n"
-            f"▫️ Время: {datetime.utcnow().strftime('%H:%M UTC')}\n\n"
-            "#ETH #Liquidation"
-        )
-        await bot.send_message(CHANNEL_ID, message)
-        
+        logging.warning("Не найдены свежие ликвидации ETH")
+            
     except Exception as e:
         logging.critical(f"Критическая ошибка публикации ликвидаций: {str(e)}")
-
-import re
-from datetime import datetime, timezone
 
 # ===== РЕАЛЬНЫЙ ПАРСИНГ WHALE ALERT =====
 async def parse_real_whale_alerts():
     """Парсинг реальных whale-транзакций с Telegram-канала Whale Alert"""
     alerts = []
-    client = TelegramClient('whale_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
     
     try:
-        await client.start()
-        channel = await client.get_entity('whale_alert_io')
+        if not client_whale.is_connected():
+            await client_whale.start()
+        
+        channel = await client_whale.get_entity(WHALE_ALERT_CHANNEL)
         
         # Получаем последние 20 сообщений
-        messages = await client.get_messages(channel, limit=20)
+        messages = await client_whale.get_messages(channel, limit=20)
         
-        for msg in messages:
+        # Фильтрация сообщений за последний час
+        min_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        recent_messages = [msg for msg in messages if msg.date > min_time]
+        
+        for msg in recent_messages:
             if data := parse_whale_message(msg.text):
                 data['timestamp'] = msg.date
                 alerts.append(data)
                 
     except Exception as e:
         logging.error(f"Ошибка парсинга Whale Alert: {str(e)}")
-    finally:
-        await client.disconnect()
     
     return alerts
 
@@ -471,14 +492,14 @@ def parse_whale_message(text: str) -> dict | None:
             return None
         
         # Парсинг основной информации
-        match = re.search(r"([\d,\.]+)\s+#ETH\s+\(([\d,\.]+)\s+USD\).*?from\s+(.*?)\s+to\s+(.*)", lines[0])
+        match = re.search(r"([\d,\.]+)\s*#?ETH\s*\(([\d,\.]+)\s+USD\).*?from\s+(.*?)\s+to\s+(.*)", lines[0], re.IGNORECASE)
         if not match:
             return None
         
         eth_amount = float(match.group(1).replace(',', ''))
         usd_amount = float(match.group(2).replace(',', ''))
-        from_wallet = match.group(3).strip()
-        to_wallet = match.group(4).strip()
+        from_wallet = match.group(3).strip().replace('#', '')
+        to_wallet = match.group(4).strip().replace('#', '')
         
         # Парсинг ссылки на транзакцию
         tx_url = None
@@ -504,6 +525,13 @@ async def publish_real_whale_alerts():
     try:
         alerts = await parse_real_whale_alerts()
         for alert in alerts:
+            # Проверка на дубликаты
+            cache_key = f"whale_{alert['eth_amount']}_{alert['usd_amount']}"
+            if cache_key in message_cache:
+                continue
+                
+            message_cache[cache_key] = True
+            
             # Форматируем сообщение
             emoji = "🐋" if alert['usd_amount'] < 100_000_000 else "🐳"
             message = (
@@ -529,10 +557,11 @@ async def publish_real_whale_alerts():
             
     except Exception as e:
         logging.critical(f"Критическая ошибка Whale Alert: {str(e)}")
+
 # ===== ИНИЦИАЛИЗАЦИЯ ПЛАНИРОВЩИКА =====
 def setup_scheduler():
-    # Новости каждые 4 часа
-    scheduler.add_job(publish_eth_news, 'interval', hours=1)
+    # Новости каждые 2 часа
+    scheduler.add_job(publish_eth_news, 'interval', hours=2)
     
     # Анализ свечей
     scheduler.add_job(send_candle_analysis, 'cron', hour='*/1', args=["1h"])  # Каждый час
@@ -540,15 +569,15 @@ def setup_scheduler():
     scheduler.add_job(send_candle_analysis, 'cron', hour=0, minute=5, args=["1d"])  # Ежедневно в 00:05 UTC
     scheduler.add_job(send_candle_analysis, 'cron', day_of_week='sun', hour=23, minute=55, args=["1w"])  # Воскресенье 23:55 UTC
     
-    # Индикатор альтсезона ежедневно в 12:00 по Лондону (11:00 UTC)
+    # Индикатор альтсезона ежедневно в 11:00 UTC
     scheduler.add_job(send_altseason_indicator, 'cron', hour=11, minute=0)
     
     # Мониторинг цены каждые 30 минут
-    scheduler.add_job(monitor_price_changes, 'interval', minutes=15)
+    scheduler.add_job(monitor_price_changes, 'interval', minutes=30)
     
-    # Имитация ликвидаций и whale alert
-    scheduler.add_job(publish_real_liquidations, 'interval', minutes=1)
-    scheduler.add_job(publish_real_whale_alerts, 'interval', minutes=2)
+    # Парсинг реальных данных
+    scheduler.add_job(publish_real_liquidations, 'interval', minutes=10)
+    scheduler.add_job(publish_real_whale_alerts, 'interval', minutes=15)
     
     scheduler.start()
 
@@ -566,20 +595,57 @@ async def cmd_start(message: types.Message):
         "Все публикации отправляются в указанный канал."
     )
 
+@dp.message(Command("status"))
+async def cmd_status(message: types.Message):
+    """Проверка статуса бота"""
+    eth_price = await get_eth_price()
+    jobs = scheduler.get_jobs()
+    
+    status = (
+        f"🟢 Бот активен\n"
+        f"▫️ Текущая цена ETH: ${eth_price:,.2f}\n"
+        f"▫️ Активных задач: {len(jobs)}\n"
+        f"▫️ След. ликвидации: {jobs[0].next_run_time if jobs else 'N/A'}\n"
+        f"▫️ След. whale alert: {jobs[1].next_run_time if len(jobs) > 1 else 'N/A'}"
+    )
+    
+    await message.answer(status)
+
 # ===== ЗАПУСК БОТА =====
 async def on_startup():
     logging.info("Starting scheduler...")
+    
+    # Проверка обязательных переменных
+    required_envs = ['API_TOKEN', 'TELEGRAM_API_ID', 'TELEGRAM_API_HASH']
+    missing = [var for var in required_envs if not os.getenv(var)]
+    
+    if missing:
+        error_msg = f"Отсутствуют переменные окружения: {', '.join(missing)}"
+        logging.critical(error_msg)
+        await bot.send_message(ADMIN_CHAT_ID, f"🔴 ОШИБКА: {error_msg}")
+        exit(1)
+    
     setup_scheduler()
     await bot.send_message(ADMIN_CHAT_ID, "🟢 Ethereum Tracker Bot запущен и работает!")
 
 async def on_shutdown():
     logging.info("Stopping scheduler...")
     scheduler.shutdown()
+    
+    # Закрытие клиентов Telegram
+    if client_liquidations.is_connected():
+        await client_liquidations.disconnect()
+    if client_whale.is_connected():
+        await client_whale.disconnect()
+    
     await bot.send_message(ADMIN_CHAT_ID, "🔴 Ethereum Tracker Bot остановлен!")
     await bot.session.close()
 
 async def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+    )
     
     await on_startup()
     await dp.start_polling(bot)
