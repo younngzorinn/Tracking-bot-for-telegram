@@ -1,58 +1,92 @@
-import logging
-import os
 import asyncio
-import aiohttp
+import logging
 from aiogram import Bot, Dispatcher, types
-from aiogram.enums import ParseMode  
-from aiogram.utils import executor
-from datetime import datetime
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ParseMode
 
-API_TOKEN = os.getenv("TELEGRAM_API_TOKEN")  # Установи переменную окружения
-BOT_USERNAME = "EthereumTrackerNewsUpdates_bot"
+# Конфигурация
+API_TOKEN = '8052550644:AAEWDNDAsx6XwVHYzyM1tTzkUj69FHEvqOQ'
+ADMIN_CHAT_ID = 579542680  # Ваш chat_id для тестов
+ALLOWED_USERS = [ADMIN_CHAT_ID]  # Список разрешенных пользователей
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-logging.basicConfig(level=logging.INFO)
+# Инициализация бота
+bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher()
 
-NEWS_SOURCES = [
-    "https://rss.app/feeds/TrK9U72kbG7ExS7s.xml",  # CoinDesk ETH
-    "https://rss.app/feeds/IxaMDb7bW79A0vUj.xml"   # Cointelegraph ETH
-]
+# ===== Middleware для приватного доступа =====
+async def check_user_access(handler, event, data):
+    if event.from_user.id not in ALLOWED_USERS:
+        await event.answer("⛔ Доступ запрещен!")
+        return False
+    return await handler(event, data)
 
-ETH_HASHTAGS = ["#ETH", "Ethereum"]
-LAST_SENT_NEWS = set()
+dp.update.middleware(check_user_access)
 
-async def fetch_rss():
-    async with aiohttp.ClientSession() as session:
-        for url in NEWS_SOURCES:
-            try:
-                async with session.get(url) as resp:
-                    text = await resp.text()
-                    items = text.split("<item>")[1:5]
-                    for item in items:
-                        title = item.split("<title>")[1].split("</title>")[0]
-                        link = item.split("<link>")[1].split("</link>")[0]
-                        guid = item.split("<guid>")[1].split("</guid>")[0]
-                        
-                        if guid not in LAST_SENT_NEWS:
-                            LAST_SENT_NEWS.add(guid)
-                            is_important = any(x in title for x in ["ETF", "BlackRock", "SEC", "whale"])
-                            emoji = "❗️❗️❗️" if is_important else ""
-                            msg = f"{emoji} <b>{title}</b>\n<a href=\"{link}\">Подробнее</a>"
-                            await bot.send_message(chat_id=os.getenv("OWNER_ID"), text=msg, parse_mode=ParseMode.HTML)
-            except Exception as e:
-                logging.warning(f"RSS error: {e}")
+# ===== КОМАНДЫ =====
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Новости ETH", callback_data="news_example")],
+        [InlineKeyboardButton(text="График ETH", callback_data="chart_example")],
+        [InlineKeyboardButton(text="Ликвидации", callback_data="liquidation_example")],
+        [InlineKeyboardButton(text="Whale Alert", callback_data="whale_example")]
+    ])
+    await message.answer(
+        "🚀 <b>Ethereum Tracker Bot</b>\n\n"
+        "Выберите пример уведомления:",
+        reply_markup=kb
+    )
 
-@dp.message_handler(commands=["start"])
-async def send_welcome(message: types.Message):
-    await message.reply("Ethereum Tracker активен. Оповещения будут приходить сюда.")
+# ===== ПРИМЕРЫ УВЕДОМЛЕНИЙ =====
+@dp.callback_query(lambda c: c.data == "news_example")
+async def news_example(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "❗️❗️❗️ <b>СРОЧНЫЕ НОВОСТИ ETH</b> ❗️❗️❗️\n\n"
+        "🔥 Vitalik Buterin предложил масштабное обновление сети\n"
+        "📍 Источник: CoinDesk\n"
+        "<a href='https://example.com'>Читать полностью</a>",
+        disable_web_page_preview=True
+    )
 
-async def scheduler():
-    while True:
-        await fetch_rss()
-        await asyncio.sleep(300)  # каждые 5 минут
+@dp.callback_query(lambda c: c.data == "chart_example")
+async def chart_example(callback: types.CallbackQuery):
+    await callback.message.answer_photo(
+        photo="https://s3.coinmarketcap.com/generated/sparklines/web/7d/2781/1027.svg",
+        caption="📊 <b>Анализ 4H свечи ETH/USDT</b>\n\n"
+                "▫️ <b>Текущая цена:</b> $3785.42 (+2.3%)\n"
+                "▫️ <b>Ключевые уровни:</b>\n"
+                "Поддержка: $3750 | $3680\n"
+                "Сопротивление: $3820 | $3900\n\n"
+                "🟢 Сценарий: Пробитие $3820 может открыть путь к $4000"
+    )
 
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.create_task(scheduler())
-    executor.start_polling(dp, skip_updates=True)
+@dp.callback_query(lambda c: c.data == "liquidation_example")
+async def liquidation_example(callback: types.CallbackQuery):
+    await callback.message.answer(
+        "📉 <b>КРУПНАЯ ЛИКВИДАЦИЯ ETH!</b>\n\n"
+        "▫️ Биржа: <b>Binance</b>\n"
+        "▫️ Направление: <b>LONG</b> ▫️ Сумма: <b>$2.1M</b>\n"
+        "▫️ Цена: $3776.40\n"
+        "▫️ Время: 12:45 UTC\n\n"
+        "#ETH #Liquidation"
+    )
+
+@dp.callback_query(lambda c: c.data == "whale_example")
+async def whale_example(callback: types.CallbackQuery):
+    await callback.message.answer(
+        "🐋 <b>WHALE ALERT!</b> 🚨\n\n"
+        "▫️ Сумма: <b>24,500 ETH</b> ($92.4M)\n"
+        "▫️ От: Binance\n"
+        "▫️ К: неизвестный кошелек\n"
+        "▫️ Транзакция: <a href='https://etherscan.io/tx/0x...'>Etherscan</a>\n\n"
+        "📍 Классификация: КИТОВАЯ ТРАНЗАКЦИЯ"
+    )
+
+# ===== ЗАПУСК БОТА =====
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
