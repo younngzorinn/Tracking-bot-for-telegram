@@ -1,9 +1,3 @@
-import win32event
-mutex = win32event.CreateMutex(None, False, "YourBotMutex")
-if win32event.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-    print("Another instance is running")
-    exit(1)
-    import os
 import asyncio
 import logging
 import aiohttp
