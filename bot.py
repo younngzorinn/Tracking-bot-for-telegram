@@ -443,7 +443,7 @@ def setup_scheduler():
     scheduler.add_job(monitor_price_changes, 'interval', minutes=30)
     
     # Имитация ликвидаций и whale alert
-    scheduler.add_job(simulate_binance_liquidations, 'interval', minutes=15)
+    scheduler.add_job(publish_real_liquidations, 'interval', minutes=15)
     scheduler.add_job(simulate_whale_alert, 'interval', minutes=20)
     
     scheduler.start()
