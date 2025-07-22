@@ -18,6 +18,8 @@ API_TOKEN = os.getenv('API_TOKEN')
 ADMIN_CHAT_ID = 579542680  # Ваш chat_id
 CHANNEL_ID = --1002881724171  # ID вашего канала для публикаций
 ALLOWED_USERS = [ADMIN_CHAT_ID]
+TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
+TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
 
 # Инициализация бота
 bot = Bot(
