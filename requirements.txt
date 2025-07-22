@@ -3,5 +3,5 @@ aiohttp>=3.10.11
 apscheduler==3.10.4
 beautifulsoup4==4.12.3
 cachetools==5.3.3
-pandas==2.2.3 --only-binary=:all:
+pandas==2.2.0
 telethon>=1.25.0
