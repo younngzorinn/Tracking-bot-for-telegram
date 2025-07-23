@@ -49,12 +49,13 @@ LIQUIDATIONS_CHANNEL = os.getenv('LIQUIDATIONS_CHANNEL', 'BinanceLiquidations')
 WHALE_ALERT_CHANNEL = os.getenv('WHALE_ALERT_CHANNEL', 'whale_alert_io')
 
 # Инициализация бота aiogram
+# Инициализация бота aiogram с правильным форматированием
 bot = Bot(
     token=API_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
-)
 # Инициализация клиентов Telethon
 try:
     client_liquidations = TelegramClient(
