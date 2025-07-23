@@ -14,6 +14,9 @@ from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bs4 import BeautifulSoup
 from telethon import TelegramClient
+import sys
+if not sys.stdin.isatty():
+    sys.stdin = open('/dev/null', 'r')
 
 # Конфигурация
 API_TOKEN = os.getenv('API_TOKEN')
@@ -347,8 +350,15 @@ async def parse_real_liquidations():
     liquidations = []
     
     try:
+        # Автоматическая авторизация через файл сессии
         if not client_liquidations.is_connected():
             await client_liquidations.start()
+            
+            # Убедимся, что сессия действительна
+            if not await client_liquidations.is_user_authorized():
+                logging.warning("Telethon session for liquidations is not authorized!")
+                await bot.send_message(ADMIN_CHAT_ID, "🔴 Ошибка авторизации Telethon для ликвидаций!")
+                return []
         
         channel = await client_liquidations.get_entity(LIQUIDATIONS_CHANNEL)
         
@@ -365,7 +375,12 @@ async def parse_real_liquidations():
                 liquidations.append(data)
                 
     except Exception as e:
-        logging.error(f"Ошибка парсинга ликвидаций: {str(e)}")
+        error_msg = f"Ошибка парсинга ликвидаций: {str(e)}"
+        logging.error(error_msg)
+        
+        # Не отправляем уведомление для EOF ошибок
+        if "EOF" not in str(e):
+            await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
     
     return liquidations
 
@@ -449,20 +464,29 @@ async def publish_real_liquidations():
                 await bot.send_message(CHANNEL_ID, message)
                 return
         
-        # Резервный вариант если данных нет
-        logging.warning("Не найдены свежие ликвидации ETH")
+        # Если не найдено свежих ликвидаций ETH
+        logging.info("За последний час не найдено ликвидаций ETH - это нормально")
             
     except Exception as e:
-        logging.critical(f"Критическая ошибка публикации ликвидаций: {str(e)}")
-
+        error_msg = f"Критическая ошибка публикации ликвидаций: {str(e)}"
+        logging.critical(error_msg)
+        await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
+        
 # ===== РЕАЛЬНЫЙ ПАРСИНГ WHALE ALERT =====
 async def parse_real_whale_alerts():
     """Парсинг реальных whale-транзакций с Telegram-канала Whale Alert"""
     alerts = []
     
     try:
+        # Автоматическая авторизация через файл сессии
         if not client_whale.is_connected():
             await client_whale.start()
+            
+            # Убедимся, что сессия действительна
+            if not await client_whale.is_user_authorized():
+                logging.warning("Telethon session for whale alerts is not authorized!")
+                await bot.send_message(ADMIN_CHAT_ID, "🔴 Ошибка авторизации Telethon для Whale Alert!")
+                return []
         
         channel = await client_whale.get_entity(WHALE_ALERT_CHANNEL)
         
@@ -479,7 +503,12 @@ async def parse_real_whale_alerts():
                 alerts.append(data)
                 
     except Exception as e:
-        logging.error(f"Ошибка парсинга Whale Alert: {str(e)}")
+        error_msg = f"Ошибка парсинга Whale Alert: {str(e)}"
+        logging.error(error_msg)
+        
+        # Не отправляем уведомление для EOF ошибок
+        if "EOF" not in str(e):
+            await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
     
     return alerts
 
@@ -562,7 +591,9 @@ async def publish_real_whale_alerts():
             logging.info("No fresh whale alerts found")
             
     except Exception as e:
-        logging.critical(f"Критическая ошибка Whale Alert: {str(e)}")
+        error_msg = f"Критическая ошибка Whale Alert: {str(e)}"
+        logging.critical(error_msg)
+        await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
 
 # ===== ИНИЦИАЛИЗАЦИЯ ПЛАНИРОВЩИКА =====
 def setup_scheduler():
@@ -579,11 +610,11 @@ def setup_scheduler():
     scheduler.add_job(send_altseason_indicator, 'cron', hour=11, minute=0)
     
     # Мониторинг цены каждые 30 минут
-    scheduler.add_job(monitor_price_changes, 'interval', minutes=30)
+    scheduler.add_job(monitor_price_changes, 'interval', minutes=15)
     
     # Парсинг реальных данных
-    scheduler.add_job(publish_real_liquidations, 'interval', minutes=10)
-    scheduler.add_job(publish_real_whale_alerts, 'interval', minutes=15)
+    scheduler.add_job(publish_real_liquidations, 'interval', minutes=1)
+    scheduler.add_job(publish_real_whale_alerts, 'interval', minutes=1)
     
     scheduler.start()
 
