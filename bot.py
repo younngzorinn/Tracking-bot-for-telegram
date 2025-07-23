@@ -1,9 +1,9 @@
-import os 
+import os
 import asyncio
 import logging
 import aiohttp
 import re
-import random
+import json
 from cachetools import TTLCache
 from datetime import datetime, timezone, timedelta
 from aiogram import Bot, Dispatcher, types
@@ -20,7 +20,7 @@ API_TOKEN = os.getenv('API_TOKEN')
 ADMIN_CHAT_ID = 579542680  # Ваш chat_id
 CHANNEL_ID = -1002881724171  # ID вашего канала для публикаций
 ALLOWED_USERS = [ADMIN_CHAT_ID]
-TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
+TELEGRAM_API_ID = int(os.getenv('TELEGRAM_API_ID'))
 TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
 LIQUIDATIONS_CHANNEL = 'BinanceLiquidations'
 WHALE_ALERT_CHANNEL = 'whale_alert_io'
@@ -68,9 +68,7 @@ async def fetch_crypto_news():
         "The Block": "https://www.theblock.co/rss/ethereum",
         "CoinTelegraph": "https://cointelegraph.com/rss/tag/ethereum",
         "Decrypt": "https://decrypt.co/feed/ethereum",
-        "ETHNews": "https://www.ethnews.com/feed",
         "CryptoSlate": "https://cryptoslate.com/categories/ethereum/feed/",
-        "TrustNodes": "https://www.trustnodes.com/feed",
         "ETHHub": "https://ethhub.io/feed.xml"
     }
     
@@ -118,9 +116,7 @@ async def fetch_crypto_news():
                                 "The Block": "🔗",
                                 "CoinTelegraph": "📢",
                                 "Decrypt": "🔓",
-                                "ETHNews": "🌐",
                                 "CryptoSlate": "🧩",
-                                "TrustNodes": "🤝",
                                 "ETHHub": "⚙️"
                             }
                             
@@ -213,18 +209,29 @@ def analyze_candle(candle):
         "resistance": resistance
     }
 
-def get_altseason_indicator():
-    """Расчет индикатора альтсезона (упрощенная версия)"""
-    # В реальной реализации здесь будет анализ доминирования BTC/ETH
-    # Пока используем случайное значение для демонстрации
-    value = random.randint(0, 100)
+async def get_altseason_indicator():
+    """Реальный индикатор альтсезона с CoinGecko"""
+    url = "https://api.coingecko.com/api/v3/global"
     
-    if value < 30:
-        return f"🔴 {value} - Доминирование BTC. Альтсезон маловероятен."
-    elif value < 70:
-        return f"🟡 {value} - Переходная фаза. Возможны движения альтов."
-    else:
-        return f"🟢 {value} - Альтсезон! Рост альткоинов вероятен."
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                data = await response.json()
+                btc_dominance = data['data']['market_cap_percentage']['btc']
+                eth_dominance = data['data']['market_cap_percentage']['eth']
+                
+                # Расчет индикатора альтсезона
+                altseason_score = 100 - btc_dominance
+                
+                if altseason_score < 30:
+                    return f"🔴 {altseason_score:.1f}% - Доминирование BTC ({btc_dominance}%). Альтсезон маловероятен."
+                elif altseason_score < 60:
+                    return f"🟡 {altseason_score:.1f}% - Переходная фаза. Доминирование ETH: {eth_dominance}%"
+                else:
+                    return f"🟢 {altseason_score:.1f}% - Альтсезон! Рост альткоинов вероятен."
+    except Exception as e:
+        logging.error(f"Error fetching altseason indicator: {e}")
+        return "🔴 Ошибка получения данных об альтсезоне"
 
 # ===== ЗАПЛАНИРОВАННЫЕ ЗАДАЧИ =====
 async def publish_eth_news():
@@ -246,7 +253,7 @@ async def publish_eth_news():
                 f"<a href='{item['link']}'>Читать полностью</a>"
             )
             await bot.send_message(CHANNEL_ID, message, disable_web_page_preview=True)
-            await asyncio.sleep(3)  # Пауза между сообщениями
+            await asyncio.sleep(2)  # Пауза между сообщениями
     except Exception as e:
         logging.error(f"Error publishing news: {e}")
 
@@ -287,12 +294,11 @@ async def send_candle_analysis(timeframe):
 async def send_altseason_indicator():
     """Отправка индикатора альтсезона"""
     try:
-        indicator = get_altseason_indicator()
+        indicator = await get_altseason_indicator()
         message = (
             "🌐 <b>ИНДИКАТОР АЛЬТСЕЗОНА</b>\n\n"
             f"{indicator}\n\n"
-            "ℹ️ Индикатор показывает вероятность начала альтсезона "
-            "(периода роста альткоинов против BTC)."
+            "ℹ️ Рассчитано на основе доминирования BTC с CoinGecko"
         )
         await bot.send_message(CHANNEL_ID, message)
     except Exception as e:
