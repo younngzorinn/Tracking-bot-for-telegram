@@ -6,10 +6,21 @@ import re
 import json
 import sys
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from dotenv import load_dotenv
 
-# Инициализация логирования
+# Импорт всех необходимых классов
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from bs4 import BeautifulSoup
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from cachetools import TTLCache
+
+# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -19,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Получение обязательных переменных окружения
+# Проверка и получение переменных окружения
 try:
     API_TOKEN = os.environ['API_TOKEN']
     TELEGRAM_API_ID = int(os.environ['TELEGRAM_API_ID'])
@@ -37,18 +48,14 @@ ALLOWED_USERS = [ADMIN_CHAT_ID]
 LIQUIDATIONS_CHANNEL = os.getenv('LIQUIDATIONS_CHANNEL', 'BinanceLiquidations')
 WHALE_ALERT_CHANNEL = os.getenv('WHALE_ALERT_CHANNEL', 'whale_alert_io')
 
-# Инициализация aiogram бота
+# Инициализация бота aiogram
 bot = Bot(
     token=API_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
-# Инициализация Telethon клиентов с использованием StringSession
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-
+# Инициализация клиентов Telethon
 try:
     client_liquidations = TelegramClient(
         StringSession(LIQUIDATIONS_SESSION),
@@ -64,6 +71,31 @@ try:
 except Exception as e:
     logger.critical(f"Ошибка инициализации Telethon клиентов: {e}")
     raise
+
+# Кэш для предотвращения дублирования сообщений
+message_cache = TTLCache(maxsize=1000, ttl=3600)  # 1 час
+
+# Глобальные переменные для отслеживания цены
+PREVIOUS_PRICE = None
+
+# Middleware для приватного доступа
+class AccessMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user_id = None
+        
+        if event.message:
+            user_id = event.message.from_user.id
+        elif event.callback_query:
+            user_id = event.callback_query.from_user.id
+        
+        if not user_id or user_id not in ALLOWED_USERS:
+            return False
+        
+        return await handler(event, data)
+
+dp.update.outer_middleware(AccessMiddleware())
+
+# ... остальной код остается без изменений ...
 
 # Кэш для предотвращения дублирования сообщений
 message_cache = TTLCache(maxsize=1000, ttl=3600)  # 1 час
