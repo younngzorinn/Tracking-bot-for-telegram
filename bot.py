@@ -4,6 +4,17 @@ import logging
 import aiohttp
 import re
 import json
+from dotenv import load_dotenv
+load_dotenv()  # Загружает переменные из .env
+
+# Теперь получаем переменные окружения
+TELEGRAM_API_ID = int(os.getenv('TELEGRAM_API_ID'))
+TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
+API_TOKEN = os.getenv('API_TOKEN')
+
+# Проверка, что переменные загружены
+if not all([TELEGRAM_API_ID, TELEGRAM_API_HASH, API_TOKEN]):
+    raise ValueError("Не все обязательные переменные окружения заданы!")
 from cachetools import TTLCache
 from datetime import datetime, timezone, timedelta
 from aiogram import Bot, Dispatcher, types
