@@ -4,49 +4,89 @@ import logging
 import aiohttp
 import re
 import json
-from dotenv import load_dotenv
-load_dotenv()  # Загружает переменные из .env
-
-# Теперь получаем переменные окружения
-TELEGRAM_API_ID = int(os.getenv('TELEGRAM_API_ID'))
-TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
-API_TOKEN = os.getenv('API_TOKEN')
-
-# Проверка, что переменные загружены
-if not all([TELEGRAM_API_ID, TELEGRAM_API_HASH, API_TOKEN]):
-    raise ValueError("Не все обязательные переменные окружения заданы!")
-from cachetools import TTLCache
-from datetime import datetime, timezone, timedelta
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-from aiogram.dispatcher.middlewares.base import BaseMiddleware
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from bs4 import BeautifulSoup
-from telethon import TelegramClient
 import sys
-if not sys.stdin.isatty():
-    sys.stdin = open('/dev/null', 'r')
-
-import os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from dotenv import load_dotenv
 
-# Создаем папку sessions если ее нет
-SESSION_DIR = Path("sessions")
-SESSION_DIR.mkdir(exist_ok=True)
+# Инициализация логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
-# Инициализация клиентов Telegram с указанием пути
-client_liquidations = TelegramClient(
-    str(SESSION_DIR / 'binance_session'),  # Явное преобразование Path в str
-    TELEGRAM_API_ID,
-    TELEGRAM_API_HASH
+# Загрузка переменных окружения
+load_dotenv()
+
+# Получение обязательных переменных окружения
+try:
+    API_TOKEN = os.environ['API_TOKEN']
+    TELEGRAM_API_ID = int(os.environ['TELEGRAM_API_ID'])
+    TELEGRAM_API_HASH = os.environ['TELEGRAM_API_HASH']
+    LIQUIDATIONS_SESSION = os.environ['LIQUIDATIONS_SESSION']
+    WHALE_ALERT_SESSION = os.environ['WHALE_ALERT_SESSION']
+except KeyError as e:
+    logger.critical(f"Отсутствует обязательная переменная окружения: {e}")
+    raise
+
+# Опциональные переменные с значениями по умолчанию
+ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', '579542680'))
+CHANNEL_ID = int(os.getenv('CHANNEL_ID', '-1002881724171'))
+ALLOWED_USERS = [ADMIN_CHAT_ID]
+LIQUIDATIONS_CHANNEL = os.getenv('LIQUIDATIONS_CHANNEL', 'BinanceLiquidations')
+WHALE_ALERT_CHANNEL = os.getenv('WHALE_ALERT_CHANNEL', 'whale_alert_io')
+
+# Инициализация aiogram бота
+bot = Bot(
+    token=API_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-client_whale = TelegramClient(
-    str(SESSION_DIR / 'whale_session'),  # Явное преобразование Path в str
-    TELEGRAM_API_ID,
-    TELEGRAM_API_HASH
-)
+dp = Dispatcher()
+scheduler = AsyncIOScheduler()
+
+# Инициализация Telethon клиентов с использованием StringSession
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+
+try:
+    client_liquidations = TelegramClient(
+        StringSession(LIQUIDATIONS_SESSION),
+        TELEGRAM_API_ID,
+        TELEGRAM_API_HASH
+    )
+    
+    client_whale = TelegramClient(
+        StringSession(WHALE_ALERT_SESSION),
+        TELEGRAM_API_ID,
+        TELEGRAM_API_HASH
+    )
+except Exception as e:
+    logger.critical(f"Ошибка инициализации Telethon клиентов: {e}")
+    raise
+
+# Кэш для предотвращения дублирования сообщений
+message_cache = TTLCache(maxsize=1000, ttl=3600)  # 1 час
+
+# Глобальные переменные для отслеживания цены
+PREVIOUS_PRICE = None
+
+# Middleware для приватного доступа
+class AccessMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user_id = None
+        
+        if event.message:
+            user_id = event.message.from_user.id
+        elif event.callback_query:
+            user_id = event.callback_query.from_user.id
+        
+        if not user_id or user_id not in ALLOWED_USERS:
+            return False
+        
+        return await handler(event, data)
+
+dp.update.outer_middleware(AccessMiddleware())
 
 # Конфигурация
 API_TOKEN = os.getenv('API_TOKEN')
