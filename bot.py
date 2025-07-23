@@ -38,14 +38,13 @@ SESSION_DIR.mkdir(exist_ok=True)
 
 # Инициализация клиентов Telegram с указанием пути
 client_liquidations = TelegramClient(
-    SESSION_DIR / 'binance_session', 
-    TELEGRAM_API_ID, 
+    str(SESSION_DIR / 'binance_session'),  # Явное преобразование Path в str
+    TELEGRAM_API_ID,
     TELEGRAM_API_HASH
 )
-
 client_whale = TelegramClient(
-    SESSION_DIR / 'whale_session', 
-    TELEGRAM_API_ID, 
+    str(SESSION_DIR / 'whale_session'),  # Явное преобразование Path в str
+    TELEGRAM_API_ID,
     TELEGRAM_API_HASH
 )
 
