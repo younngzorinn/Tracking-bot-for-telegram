@@ -18,6 +18,26 @@ import sys
 if not sys.stdin.isatty():
     sys.stdin = open('/dev/null', 'r')
 
+import os
+from pathlib import Path
+
+# Создаем папку sessions если ее нет
+SESSION_DIR = Path("sessions")
+SESSION_DIR.mkdir(exist_ok=True)
+
+# Инициализация клиентов Telegram с указанием пути
+client_liquidations = TelegramClient(
+    SESSION_DIR / 'binance_session', 
+    TELEGRAM_API_ID, 
+    TELEGRAM_API_HASH
+)
+
+client_whale = TelegramClient(
+    SESSION_DIR / 'whale_session', 
+    TELEGRAM_API_ID, 
+    TELEGRAM_API_HASH
+)
+
 # Конфигурация
 API_TOKEN = os.getenv('API_TOKEN')
 ADMIN_CHAT_ID = 579542680  # Ваш chat_id
