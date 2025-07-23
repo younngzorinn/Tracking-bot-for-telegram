@@ -130,6 +130,8 @@ TELEGRAM_API_ID = int(os.getenv('TELEGRAM_API_ID'))
 TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
 LIQUIDATIONS_CHANNEL = 'BinanceLiquidations'
 WHALE_ALERT_CHANNEL = 'whale_alert_io'
+LIQUIDATIONS_CHANNEL_ID = -1001260161873  # ID канала BinanceLiquidations
+WHALE_ALERT_CHANNEL_ID = -1001309043988   # ID канала whale_alert_io
 
 # Инициализация бота
 bot = Bot(
@@ -447,45 +449,24 @@ async def monitor_price_changes():
         logging.error(f"Error monitoring price changes: {e}")
 
 
-# ===== РЕАЛЬНЫЙ ПАРСИНГ ЛИКВИДАЦИЙ =====
-async def parse_real_liquidations():
-    """Парсинг реальных ликвидаций с Telegram-канала"""
-    liquidations = []
-    
-    try:
-        # Автоматическая авторизация через файл сессии
-        if not client_liquidations.is_connected():
-            await client_liquidations.start()
+async def publish_liquidations():
+    messages = await get_last_messages(LIQUIDATIONS_CHANNEL_ID)
+    for msg in messages:
+        if "Liquidated on #ETH" in msg.text:
+            await bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=f"📉 Ликвидация ETH\n{msg.text}",
+                disable_web_page_preview=True
+            )
             
-            # Убедимся, что сессия действительна
-            if not await client_liquidations.is_user_authorized():
-                logging.warning("Telethon session for liquidations is not authorized!")
-                await bot.send_message(ADMIN_CHAT_ID, "🔴 Ошибка авторизации Telethon для ликвидаций!")
-                return []
-        
-        channel = await client_liquidations.get_entity(LIQUIDATIONS_CHANNEL)
-        
-        # Получаем последние 20 сообщений
-        messages = await client_liquidations.get_messages(channel, limit=20)
-        
-        # Фильтрация сообщений за последний час
-        min_time = datetime.now(timezone.utc) - timedelta(hours=1)
-        recent_messages = [msg for msg in messages if msg.date > min_time]
-        
-        for msg in recent_messages:
-            if data := parse_liquidation_message(msg.text):
-                data['timestamp'] = msg.date
-                liquidations.append(data)
-                
+async def get_last_messages(chat_id: int, limit: int = 5):
+    """Получение последних сообщений через Bot API"""
+    try:
+        messages = await bot.get_chat_history(chat_id=chat_id, limit=limit)
+        return [msg for msg in messages if msg.text]
     except Exception as e:
-        error_msg = f"Ошибка парсинга ликвидаций: {str(e)}"
-        logging.error(error_msg)
-        
-        # Не отправляем уведомление для EOF ошибок
-        if "EOF" not in str(e):
-            await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
-    
-    return liquidations
+        logger.error(f"Ошибка получения сообщений: {e}")
+        return []
 
 def parse_liquidation_message(text: str) -> dict | None:
     """Разбор сообщения с ликвидацией"""
@@ -576,44 +557,15 @@ async def publish_real_liquidations():
         await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
         
 # ===== РЕАЛЬНЫЙ ПАРСИНГ WHALE ALERT =====
-async def parse_real_whale_alerts():
-    """Парсинг реальных whale-транзакций с Telegram-канала Whale Alert"""
-    alerts = []
-    
-    try:
-        # Автоматическая авторизация через файл сессии
-        if not client_whale.is_connected():
-            await client_whale.start()
-            
-            # Убедимся, что сессия действительна
-            if not await client_whale.is_user_authorized():
-                logging.warning("Telethon session for whale alerts is not authorized!")
-                await bot.send_message(ADMIN_CHAT_ID, "🔴 Ошибка авторизации Telethon для Whale Alert!")
-                return []
-        
-        channel = await client_whale.get_entity(WHALE_ALERT_CHANNEL)
-        
-        # Получаем последние 20 сообщений
-        messages = await client_whale.get_messages(channel, limit=20)
-        
-        # Фильтрация сообщений за последний час
-        min_time = datetime.now(timezone.utc) - timedelta(hours=1)
-        recent_messages = [msg for msg in messages if msg.date > min_time]
-        
-        for msg in recent_messages:
-            if data := parse_whale_message(msg.text):
-                data['timestamp'] = msg.date
-                alerts.append(data)
-                
-    except Exception as e:
-        error_msg = f"Ошибка парсинга Whale Alert: {str(e)}"
-        logging.error(error_msg)
-        
-        # Не отправляем уведомление для EOF ошибок
-        if "EOF" not in str(e):
-            await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
-    
-    return alerts
+async def publish_whale_alerts():
+    messages = await get_last_messages(WHALE_ALERT_CHANNEL_ID)
+    for msg in messages:
+        if "#ETH" in msg.text and "USD" in msg.text:
+            await bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=f"🐋 Whale Alert\n{msg.text}",
+                disable_web_page_preview=True
+            )
 
 def parse_whale_message(text: str) -> dict | None:
     """Разбор сообщения о whale-транзакции"""
@@ -716,8 +668,8 @@ def setup_scheduler():
     scheduler.add_job(monitor_price_changes, 'interval', minutes=15)
     
     # Парсинг реальных данных
-    scheduler.add_job(publish_real_liquidations, 'interval', minutes=1)
-    scheduler.add_job(publish_real_whale_alerts, 'interval', minutes=1)
+    scheduler.add_job(publish_liquidations, 'interval', minutes=1)
+    scheduler.add_job(publish_whale_alerts, 'interval', minutes=1)
     
     scheduler.start()
 
