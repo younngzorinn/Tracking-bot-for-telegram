@@ -1,3 +1,0 @@
-# Для Whale Alert
-client = TelegramClient('whale_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
-client.start()
