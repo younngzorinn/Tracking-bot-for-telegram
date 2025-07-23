@@ -54,7 +54,7 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
-
+)
 # Инициализация клиентов Telethon
 try:
     client_liquidations = TelegramClient(
