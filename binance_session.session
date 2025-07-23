@@ -1,0 +1,4 @@
+# Для ликвидаций
+from telethon import TelegramClient
+client = TelegramClient('binance_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
+client.start()
