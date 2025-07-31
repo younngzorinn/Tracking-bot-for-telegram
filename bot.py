@@ -2,43 +2,6 @@ import os
 import asyncio
 import logging
 import aiohttp
-from aiohttp import web  # Добавьте этот импорт
-# ... остальные импорты остаются без изменений ...
-
-# ... весь ваш существующий код ...
-
-# ===== HTTP SERVER FOR HEALTH CHECKS =====
-async def health_handler(request):
-    return web.Response(text="Bot is running")
-
-async def start_http_server():
-    """Запуск HTTP-сервера для health checks"""
-    app = web.Application()
-    app.router.add_get('/health', health_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    logging.info(f"HTTP server started on port {port}")
-
-# ===== ОБНОВЛЕННАЯ ФУНКЦИЯ MAIN =====
-async def main():
-    # Запуск HTTP-сервера
-    await start_http_server()
-    
-    # Инициализация бота
-    await on_startup()
-    
-    # Запуск обработки сообщений
-    await dp.start_polling(bot)
-    
-    # Остановка
-    await on_shutdown()
-
-if __name__ == "__main__":
-    asyncio.run(main())
 import re
 import json
 import sys
@@ -51,11 +14,11 @@ from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from aiogram.exceptions import TelegramForbiddenError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bs4 import BeautifulSoup
-from telethon import TelegramClient
-from telethon.sessions import StringSession
 from cachetools import TTLCache
+from aiohttp import web
 
 # Настройка логирования
 logging.basicConfig(
@@ -70,45 +33,23 @@ load_dotenv()
 # Проверка и получение переменных окружения
 try:
     API_TOKEN = os.environ['API_TOKEN']
-    TELEGRAM_API_ID = int(os.environ['TELEGRAM_API_ID'])
-    TELEGRAM_API_HASH = os.environ['TELEGRAM_API_HASH']
-    LIQUIDATIONS_SESSION = os.environ['LIQUIDATIONS_SESSION']
-    WHALE_ALERT_SESSION = os.environ['WHALE_ALERT_SESSION']
+    ADMIN_CHAT_ID = int(os.environ['ADMIN_CHAT_ID'])
+    CHANNEL_ID = int(os.environ['CHANNEL_ID'])
 except KeyError as e:
     logger.critical(f"Отсутствует обязательная переменная окружения: {e}")
     raise
 
-# Опциональные переменные с значениями по умолчанию
-ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', '579542680'))
-CHANNEL_ID = int(os.getenv('CHANNEL_ID', '-1002881724171'))
-ALLOWED_USERS = [ADMIN_CHAT_ID]
-LIQUIDATIONS_CHANNEL = os.getenv('LIQUIDATIONS_CHANNEL', 'BinanceLiquidations')
-WHALE_ALERT_CHANNEL = os.getenv('WHALE_ALERT_CHANNEL', 'whale_alert_io')
+# URL каналов для мониторинга
+LIQUIDATIONS_CHANNEL_URL = "https://t.me/s/BinanceLiquidations"
+WHALE_ALERT_CHANNEL_URL = "https://t.me/s/whale_alert_io"
 
 # Инициализация бота aiogram
-# Инициализация бота aiogram с правильным форматированием
 bot = Bot(
     token=API_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
-# Инициализация клиентов Telethon
-try:
-    client_liquidations = TelegramClient(
-        StringSession(LIQUIDATIONS_SESSION),
-        TELEGRAM_API_ID,
-        TELEGRAM_API_HASH
-    )
-    
-    client_whale = TelegramClient(
-        StringSession(WHALE_ALERT_SESSION),
-        TELEGRAM_API_ID,
-        TELEGRAM_API_HASH
-    )
-except Exception as e:
-    logger.critical(f"Ошибка инициализации Telethon клиентов: {e}")
-    raise
 
 # Кэш для предотвращения дублирования сообщений
 message_cache = TTLCache(maxsize=1000, ttl=3600)  # 1 час
@@ -126,79 +67,7 @@ class AccessMiddleware(BaseMiddleware):
         elif event.callback_query:
             user_id = event.callback_query.from_user.id
         
-        if not user_id or user_id not in ALLOWED_USERS:
-            return False
-        
-        return await handler(event, data)
-
-dp.update.outer_middleware(AccessMiddleware())
-
-# ... остальной код остается без изменений ...
-
-# Кэш для предотвращения дублирования сообщений
-message_cache = TTLCache(maxsize=1000, ttl=3600)  # 1 час
-
-# Глобальные переменные для отслеживания цены
-PREVIOUS_PRICE = None
-
-# Middleware для приватного доступа
-class AccessMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        user_id = None
-        
-        if event.message:
-            user_id = event.message.from_user.id
-        elif event.callback_query:
-            user_id = event.callback_query.from_user.id
-        
-        if not user_id or user_id not in ALLOWED_USERS:
-            return False
-        
-        return await handler(event, data)
-
-dp.update.outer_middleware(AccessMiddleware())
-
-# Конфигурация
-API_TOKEN = os.getenv('API_TOKEN')
-ADMIN_CHAT_ID = 579542680  # Ваш chat_id
-CHANNEL_ID = -1002881724171  # ID вашего канала для публикаций
-ALLOWED_USERS = [ADMIN_CHAT_ID]
-TELEGRAM_API_ID = int(os.getenv('TELEGRAM_API_ID'))
-TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
-LIQUIDATIONS_CHANNEL = 'BinanceLiquidations'
-WHALE_ALERT_CHANNEL = 'whale_alert_io'
-LIQUIDATIONS_CHANNEL_ID = -1001260161873  # ID канала BinanceLiquidations
-WHALE_ALERT_CHANNEL_ID = -1001309043988   # ID канала whale_alert_io
-
-# Инициализация бота
-bot = Bot(
-    token=API_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-dp = Dispatcher()
-scheduler = AsyncIOScheduler()
-
-# Инициализация клиентов Telegram
-client_liquidations = TelegramClient('binance_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
-client_whale = TelegramClient('whale_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
-
-# Кэш для предотвращения дублирования сообщений
-message_cache = TTLCache(maxsize=1000, ttl=3600)  # 1 час
-
-# Глобальные переменные для отслеживания цены
-PREVIOUS_PRICE = None
-
-# ===== Middleware для приватного доступа =====
-class AccessMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        user_id = None
-        
-        if event.message:
-            user_id = event.message.from_user.id
-        elif event.callback_query:
-            user_id = event.callback_query.from_user.id
-        
-        if not user_id or user_id not in ALLOWED_USERS:
+        if not user_id or user_id != ADMIN_CHAT_ID:
             return False
         
         return await handler(event, data)
@@ -378,6 +247,42 @@ async def get_altseason_indicator():
         logging.error(f"Error fetching altseason indicator: {e}")
         return "🔴 Ошибка получения данных об альтсезоне"
 
+async def fetch_telegram_channel(url):
+    """Получение сообщений из публичного Telegram канала через веб-интерфейс"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    messages = []
+                    # Ищем все сообщения в канале
+                    for message_div in soup.find_all('div', class_='tgme_widget_message'):
+                        # Пропускаем рекламные посты
+                        if message_div.find('a', class_='tgme_widget_message_ad_label'):
+                            continue
+                            
+                        text_div = message_div.find('div', class_='tgme_widget_message_text')
+                        if text_div:
+                            message_text = text_div.get_text(strip=True)
+                            message_link = message_div.find('a', class_='tgme_widget_message_date')['href']
+                            message_time = message_div.find('time')['datetime']
+                            
+                            messages.append({
+                                'text': message_text,
+                                'link': message_link,
+                                'time': message_time
+                            })
+                    
+                    return messages
+                else:
+                    logging.error(f"Ошибка при получении канала {url}: статус {response.status}")
+                    return []
+    except Exception as e:
+        logging.error(f"Ошибка парсинга канала {url}: {e}")
+        return []
+
 # ===== ЗАПЛАНИРОВАННЫЕ ЗАДАЧИ =====
 async def publish_eth_news():
     """Публикация новостей о ETH"""
@@ -485,207 +390,53 @@ async def monitor_price_changes():
     except Exception as e:
         logging.error(f"Error monitoring price changes: {e}")
 
-
 async def publish_liquidations():
-    messages = await get_last_messages(LIQUIDATIONS_CHANNEL_ID)
-    for msg in messages:
-        if "Liquidated on #ETH" in msg.text:
-            await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=f"📉 Ликвидация ETH\n{msg.text}",
-                disable_web_page_preview=True
-            )
-            
-async def get_last_messages(chat_id: int, limit: int = 5):
-    """Получение последних сообщений через Bot API"""
+    """Публикация данных о ликвидациях"""
     try:
-        messages = await bot.get_chat_history(chat_id=chat_id, limit=limit)
-        return [msg for msg in messages if msg.text]
-    except Exception as e:
-        logger.error(f"Ошибка получения сообщений: {e}")
-        return []
-
-def parse_liquidation_message(text: str) -> dict | None:
-    """Разбор сообщения с ликвидацией"""
-    if not text or not text.startswith("Liquidated on"):
-        return None
-    
-    try:
-        # Пример сообщения:
-        # Liquidated on #ETH: 1.234M $ at $3500.00
-        # Short | Cross
-        lines = text.split('\n')
-        if len(lines) < 2:
-            return None
-        
-        # Парсинг первой строки
-        match = re.search(r"#(\w+): ([\d\.]+[MK]?)\s*\$\s*at\s*\$\s*([\d\.,]+)", lines[0])
-        if not match:
-            return None
-        
-        symbol = match.group(1)  # ETH, BTC и т.д.
-        amount_str = match.group(2).replace(',', '')
-        price = float(match.group(3).replace(',', ''))
-        
-        # Конвертация суммы (1K = 1000, 1M = 1000000)
-        multiplier = 1
-        if 'M' in amount_str:
-            multiplier = 1_000_000
-            amount_str = amount_str.replace('M', '')
-        elif 'K' in amount_str:
-            multiplier = 1_000
-            amount_str = amount_str.replace('K', '')
-        
-        amount = float(amount_str) * multiplier
-        
-        # Парсинг второй строки
-        position_type = "Long" if "Long" in lines[1] else "Short"
-        
-        return {
-            'symbol': symbol,
-            'amount': amount,
-            'price': price,
-            'position': position_type
-        }
-    
-    except (ValueError, IndexError) as e:
-        logging.warning(f"Ошибка формата сообщения: {str(e)}")
-        return None
-
-async def publish_real_liquidations():
-    """Публикация реальных данных о ликвидациях"""
-    try:
-        # Получаем реальные данные
-        liquidations = await parse_real_liquidations()
-        
-        if liquidations:
-            # Фильтруем только ETH и берем последнюю ликвидацию
-            eth_liquidations = [l for l in liquidations if l['symbol'] == 'ETH']
-            if eth_liquidations:
-                last = eth_liquidations[0]
-                amount = last['amount']
-                price = last['price']
-                position = last['position']
-                
+        messages = await fetch_telegram_channel(LIQUIDATIONS_CHANNEL_URL)
+        for msg in messages:
+            if "Liquidated on #ETH" in msg['text']:
                 # Проверка на дубликаты
-                cache_key = f"liq_{amount}_{price}"
+                cache_key = f"liq_{msg['link']}"
                 if cache_key in message_cache:
-                    return
+                    continue
                     
                 message_cache[cache_key] = True
                 
+                # Форматируем сообщение
                 message = (
-                    "📉 <b>РЕАЛЬНАЯ ЛИКВИДАЦИЯ ETH НА BINANCE!</b>\n\n"
-                    f"▫️ Направление: <b>{position}</b>\n"
-                    f"▫️ Сумма: <b>${amount/1_000_000:.2f}M</b>\n"
-                    f"▫️ Цена: ${price:.2f}\n"
-                    f"▫️ Время: {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n\n"
-                    "#ETH #Liquidation #Binance"
+                    "📉 <b>ЛИКВИДАЦИЯ ETH НА BINANCE!</b>\n\n"
+                    f"{msg['text']}\n\n"
+                    f"<a href='{msg['link']}'>Источник</a> | {msg['time']}"
                 )
-                await bot.send_message(CHANNEL_ID, message)
-                return
-        
-        # Если не найдено свежих ликвидаций ETH
-        logging.info("За последний час не найдено ликвидаций ETH - это нормально")
-            
+                await bot.send_message(CHANNEL_ID, message, disable_web_page_preview=True)
+                await asyncio.sleep(1)  # Пауза между сообщениями
     except Exception as e:
-        error_msg = f"Критическая ошибка публикации ликвидаций: {str(e)}"
-        logging.critical(error_msg)
-        await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
-        
-# ===== РЕАЛЬНЫЙ ПАРСИНГ WHALE ALERT =====
+        logging.error(f"Ошибка публикации ликвидаций: {e}")
+
 async def publish_whale_alerts():
-    messages = await get_last_messages(WHALE_ALERT_CHANNEL_ID)
-    for msg in messages:
-        if "#ETH" in msg.text and "USD" in msg.text:
-            await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=f"🐋 Whale Alert\n{msg.text}",
-                disable_web_page_preview=True
-            )
-
-def parse_whale_message(text: str) -> dict | None:
-    """Разбор сообщения о whale-транзакции"""
-    if not text or "#ETH" not in text:
-        return None
-    
+    """Публикация whale-транзакций"""
     try:
-        # Пример сообщения:
-        # 🚨  24,999 #ETH (87,465,128 USD) transferred from #Coinbase to unknown wallet
-        # Tx: https://etherscan.io/tx/0x... 
-        # #ETH #WhaleAlert
-        lines = text.split('\n')
-        if len(lines) < 1:
-            return None
-        
-        # Парсинг основной информации
-        match = re.search(r"([\d,\.]+)\s*#?ETH\s*\(([\d,\.]+)\s+USD\).*?from\s+(.*?)\s+to\s+(.*)", lines[0], re.IGNORECASE)
-        if not match:
-            return None
-        
-        eth_amount = float(match.group(1).replace(',', ''))
-        usd_amount = float(match.group(2).replace(',', ''))
-        from_wallet = match.group(3).strip().replace('#', '')
-        to_wallet = match.group(4).strip().replace('#', '')
-        
-        # Парсинг ссылки на транзакцию
-        tx_url = None
-        for line in lines:
-            if line.startswith("Tx: http"):
-                tx_url = line.replace("Tx: ", "").strip()
-                break
-        
-        return {
-            'eth_amount': eth_amount,
-            'usd_amount': usd_amount,
-            'from_wallet': from_wallet,
-            'to_wallet': to_wallet,
-            'tx_url': tx_url
-        }
-    
-    except (ValueError, IndexError) as e:
-        logging.warning(f"Ошибка формата Whale Alert: {str(e)}")
-        return None
-
-async def publish_real_whale_alerts():
-    """Публикация реальных whale-транзакций"""
-    try:
-        alerts = await parse_real_whale_alerts()
-        for alert in alerts:
-            # Проверка на дубликаты
-            cache_key = f"whale_{alert['eth_amount']}_{alert['usd_amount']}"
-            if cache_key in message_cache:
-                continue
+        messages = await fetch_telegram_channel(WHALE_ALERT_CHANNEL_URL)
+        for msg in messages:
+            if "#ETH" in msg['text'] and "USD" in msg['text']:
+                # Проверка на дубликаты
+                cache_key = f"whale_{msg['link']}"
+                if cache_key in message_cache:
+                    continue
+                    
+                message_cache[cache_key] = True
                 
-            message_cache[cache_key] = True
-            
-            # Форматируем сообщение
-            emoji = "🐋" if alert['usd_amount'] < 100_000_000 else "🐳"
-            message = (
-                f"{emoji} <b>WHALE ALERT: {alert['eth_amount']:,.0f} ETH!</b>\n\n"
-                f"▫️ Сумма: <b>${alert['usd_amount']/1_000_000:.2f}M</b>\n"
-                f"▫️ От: {alert['from_wallet']}\n"
-                f"▫️ К: {alert['to_wallet']}\n"
-            )
-            
-            if alert['tx_url']:
-                message += f"▫️ Транзакция: <a href='{alert['tx_url']}'>Etherscan</a>\n"
-            
-            message += (
-                f"▫️ Время: {alert['timestamp'].astimezone(timezone.utc).strftime('%H:%M UTC')}\n\n"
-                "#ETH #WhaleAlert"
-            )
-            
-            await bot.send_message(CHANNEL_ID, message, disable_web_page_preview=True)
-        
-        # Если не найдено свежих транзакций
-        if not alerts:
-            logging.info("No fresh whale alerts found")
-            
+                # Форматируем сообщение
+                message = (
+                    "🐋 <b>WHALE ALERT!</b>\n\n"
+                    f"{msg['text']}\n\n"
+                    f"<a href='{msg['link']}'>Источник</a> | {msg['time']}"
+                )
+                await bot.send_message(CHANNEL_ID, message, disable_web_page_preview=True)
+                await asyncio.sleep(1)  # Пауза между сообщениями
     except Exception as e:
-        error_msg = f"Критическая ошибка Whale Alert: {str(e)}"
-        logging.critical(error_msg)
-        await bot.send_message(ADMIN_CHAT_ID, f"🔴 {error_msg}")
+        logging.error(f"Ошибка публикации whale alerts: {e}")
 
 # ===== ИНИЦИАЛИЗАЦИЯ ПЛАНИРОВЩИКА =====
 def setup_scheduler():
@@ -701,12 +452,12 @@ def setup_scheduler():
     # Индикатор альтсезона ежедневно в 11:00 UTC
     scheduler.add_job(send_altseason_indicator, 'cron', hour=11, minute=0)
     
-    # Мониторинг цены каждые 30 минут
+    # Мониторинг цены каждые 15 минут
     scheduler.add_job(monitor_price_changes, 'interval', minutes=15)
     
-    # Парсинг реальных данных
-    scheduler.add_job(publish_liquidations, 'interval', minutes=1)
-    scheduler.add_job(publish_whale_alerts, 'interval', minutes=1)
+    # Парсинг данных
+    scheduler.add_job(publish_liquidations, 'interval', minutes=10)
+    scheduler.add_job(publish_whale_alerts, 'interval', minutes=15)
     
     scheduler.start()
 
@@ -732,52 +483,92 @@ async def cmd_status(message: types.Message):
     
     status = (
         f"🟢 Бот активен\n"
-        f"▫️ Текущая цена ETH: ${eth_price:,.2f}\n"
+        f"▫️ Текущая цена ETH: ${eth_price:,.2f if eth_price else 'N/A'}\n"
         f"▫️ Активных задач: {len(jobs)}\n"
-        f"▫️ След. ликвидации: {jobs[0].next_run_time if jobs else 'N/A'}\n"
-        f"▫️ След. whale alert: {jobs[1].next_run_time if len(jobs) > 1 else 'N/A'}"
+        f"▫️ След. ликвидации: {jobs[5].next_run_time if len(jobs) > 5 else 'N/A'}\n"
+        f"▫️ След. whale alert: {jobs[6].next_run_time if len(jobs) > 6 else 'N/A'}"
     )
     
     await message.answer(status)
 
-# ===== ЗАПУСК БОТА =====
+@dp.message(Command("ping_admin"))
+async def cmd_ping_admin(message: types.Message):
+    """Проверка доступности администратора"""
+    try:
+        await bot.send_chat_action(ADMIN_CHAT_ID, "typing")
+        await message.answer("✅ Администратор доступен")
+    except TelegramForbiddenError:
+        await message.answer("❌ Ошибка: бот не может связаться с администратором")
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка: {str(e)}")
+
+# ===== HTTP SERVER FOR HEALTH CHECKS =====
+async def health_handler(request):
+    return web.Response(text="Bot is running")
+
+async def start_http_server():
+    """Запуск HTTP-сервера для health checks"""
+    app = web.Application()
+    app.router.add_get('/health', health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"HTTP server started on port {port}")
+
+# ===== ОСНОВНЫЕ ФУНКЦИИ ЗАПУСКА =====
 async def on_startup():
     logging.info("Starting scheduler...")
     
     # Проверка обязательных переменных
-    required_envs = ['API_TOKEN', 'TELEGRAM_API_ID', 'TELEGRAM_API_HASH']
+    required_envs = ['API_TOKEN', 'ADMIN_CHAT_ID', 'CHANNEL_ID']
     missing = [var for var in required_envs if not os.getenv(var)]
     
     if missing:
         error_msg = f"Отсутствуют переменные окружения: {', '.join(missing)}"
         logging.critical(error_msg)
-        await bot.send_message(ADMIN_CHAT_ID, f"🔴 ОШИБКА: {error_msg}")
         exit(1)
     
     setup_scheduler()
-    await bot.send_message(ADMIN_CHAT_ID, "🟢 Ethereum Tracker Bot запущен и работает!")
+    
+    # Проверка доступности администратора
+    try:
+        me = await bot.get_me()
+        logging.info(f"Бот @{me.username} успешно запущен")
+        
+        # ПРОВЕРКА: Бот может отправлять сообщения администратору?
+        await bot.send_chat_action(ADMIN_CHAT_ID, "typing")
+        logging.info(f"Администратор {ADMIN_CHAT_ID} доступен")
+    except TelegramForbiddenError:
+        logging.warning(f"Бот не может отправить сообщение администратору {ADMIN_CHAT_ID}. "
+                        "Убедитесь, что администратор запустил бота командой /start")
+    except Exception as e:
+        logging.error(f"Ошибка проверки администратора: {e}")
 
 async def on_shutdown():
     logging.info("Stopping scheduler...")
     scheduler.shutdown()
-    
-    # Закрытие клиентов Telegram
-    if client_liquidations.is_connected():
-        await client_liquidations.disconnect()
-    if client_whale.is_connected():
-        await client_whale.disconnect()
-    
-    await bot.send_message(ADMIN_CHAT_ID, "🔴 Ethereum Tracker Bot остановлен!")
-    await bot.session.close()
+    try:
+        await bot.send_message(ADMIN_CHAT_ID, "🔴 Ethereum Tracker Bot остановлен!")
+    except TelegramForbiddenError:
+        logging.warning("Не удалось отправить сообщение администратору при остановке")
+    except Exception as e:
+        logging.error(f"Ошибка при остановке: {e}")
 
+# ===== ГЛАВНАЯ ФУНКЦИЯ =====
 async def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-    )
+    # Запуск HTTP-сервера
+    await start_http_server()
     
+    # Инициализация бота
     await on_startup()
+    
+    # Запуск обработки сообщений
     await dp.start_polling(bot)
+    
+    # Остановка
     await on_shutdown()
 
 if __name__ == "__main__":
