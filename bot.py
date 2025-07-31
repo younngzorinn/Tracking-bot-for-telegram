@@ -2,6 +2,43 @@ import os
 import asyncio
 import logging
 import aiohttp
+from aiohttp import web  # Добавьте этот импорт
+# ... остальные импорты остаются без изменений ...
+
+# ... весь ваш существующий код ...
+
+# ===== HTTP SERVER FOR HEALTH CHECKS =====
+async def health_handler(request):
+    return web.Response(text="Bot is running")
+
+async def start_http_server():
+    """Запуск HTTP-сервера для health checks"""
+    app = web.Application()
+    app.router.add_get('/health', health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"HTTP server started on port {port}")
+
+# ===== ОБНОВЛЕННАЯ ФУНКЦИЯ MAIN =====
+async def main():
+    # Запуск HTTP-сервера
+    await start_http_server()
+    
+    # Инициализация бота
+    await on_startup()
+    
+    # Запуск обработки сообщений
+    await dp.start_polling(bot)
+    
+    # Остановка
+    await on_shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(main())
 import re
 import json
 import sys
